@@ -16,6 +16,8 @@ const BETS = {
 };
 const BOOST_MULTIPLIERS = [2, 2, 2, 3, 3, 4, 5, 8, 10];
 const QUICK_BETS = [10000, 25000, 50000, 100000, 250000];
+const BIG_ROAD_ROWS = 6;
+const BIG_ROAD_MIN_COLUMNS = 18;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const money = (n) => new Intl.NumberFormat('ko-KR').format(Math.floor(n));
@@ -61,10 +63,6 @@ function makeBoosts() {
   });
 }
 
-function cardKey(card) {
-  return `${card.rank}${card.suit}`;
-}
-
 function sideBoost(cards, boosts) {
   let multiplier = 1;
   const matches = [];
@@ -78,11 +76,55 @@ function sideBoost(cards, boosts) {
   return { multiplier, matches };
 }
 
-function PlayingCard({ card, compact = false }) {
-  if (!card) return <div className={`playing-card placeholder ${compact ? 'compact' : ''}`} />;
+function buildBigRoad(rounds, rowCount = BIG_ROAD_ROWS) {
+  const columns = [];
+  let currentColumn = 0;
+  let currentRow = 0;
+  let previousWinner = null;
+
+  function place(col, row, winner) {
+    while (!columns[col]) columns[col] = Array(rowCount).fill(null);
+    columns[col][row] = { winner };
+  }
+
+  for (const round of rounds) {
+    const winner = round?.winner;
+    if (!winner) continue;
+
+    if (previousWinner === null) {
+      currentColumn = 0;
+      currentRow = 0;
+      place(currentColumn, currentRow, winner);
+      previousWinner = winner;
+      continue;
+    }
+
+    if (winner === previousWinner) {
+      const canGoDown = currentRow + 1 < rowCount && !columns[currentColumn]?.[currentRow + 1];
+      if (canGoDown) {
+        currentRow += 1;
+      } else {
+        currentColumn += 1;
+        while (columns[currentColumn]?.[currentRow]) currentColumn += 1;
+      }
+      place(currentColumn, currentRow, winner);
+    } else {
+      currentColumn += 1;
+      currentRow = 0;
+      while (columns[currentColumn]?.[currentRow]) currentColumn += 1;
+      place(currentColumn, currentRow, winner);
+      previousWinner = winner;
+    }
+  }
+
+  return columns;
+}
+
+function PlayingCard({ card }) {
+  if (!card) return <div className="playing-card placeholder" />;
   const red = card.suit === '♥' || card.suit === '♦';
   return (
-    <div className={`playing-card ${red ? 'red' : ''} ${compact ? 'compact' : ''}`}>
+    <div className={`playing-card ${red ? 'red' : ''}`}>
       <div className="rank">{card.rank}</div>
       <div className="suit">{card.suit}</div>
     </div>
@@ -98,6 +140,49 @@ function BoostCard({ boost, hit }) {
       </div>
       <div className="boost-mult">×{boost.mult}</div>
     </div>
+  );
+}
+
+function BigRoad({ history }) {
+  const chronological = useMemo(() => [...history].reverse(), [history]);
+  const columns = useMemo(() => buildBigRoad(chronological), [chronological]);
+  const totalColumns = Math.max(BIG_ROAD_MIN_COLUMNS, columns.length + 2);
+
+  return (
+    <section className="road-panel">
+      <div className="road-head">
+        <div>
+          <div className="road-title">BIG ROAD</div>
+          <div className="road-sub">왼쪽 → 오른쪽, 연속 결과는 아래로 누적</div>
+        </div>
+        <div className="road-counts">
+          <span className="count player">P {history.filter((h) => h.winner === 'player').length}</span>
+          <span className="count banker">B {history.filter((h) => h.winner === 'banker').length}</span>
+          <span className="count tie">T {history.filter((h) => h.winner === 'tie').length}</span>
+        </div>
+      </div>
+
+      <div className="road-board-wrap">
+        <div className="road-board">
+          {Array.from({ length: totalColumns }).map((_, colIdx) => (
+            <div className="road-column" key={`col-${colIdx}`}>
+              {Array.from({ length: BIG_ROAD_ROWS }).map((__, rowIdx) => {
+                const cell = columns[colIdx]?.[rowIdx];
+                return (
+                  <div className="road-cell" key={`cell-${colIdx}-${rowIdx}`}>
+                    {cell && (
+                      <div className={`road-ball ${cell.winner}`}>
+                        {cell.winner === 'player' ? 'P' : cell.winner === 'banker' ? 'B' : 'T'}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -131,7 +216,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!hydrated) return;
-    localStorage.setItem('velvet-history-v2', JSON.stringify(history.slice(0, 30)));
+    localStorage.setItem('velvet-history-v2', JSON.stringify(history.slice(0, 120)));
   }, [history, hydrated]);
 
   const playerBoost = useMemo(() => sideBoost(playerCards, boosts), [playerCards, boosts]);
@@ -210,7 +295,7 @@ export default function Home() {
     if (returned > 0) setBalance((bal) => bal + returned);
     const finalResult = { winner, pTotal, bTotal, outcome, profit, appliedMultiplier, pBoost, bBoost };
     setResult(finalResult);
-    setHistory((h) => [{ winner, pTotal, bTotal }, ...h].slice(0, 30));
+    setHistory((h) => [{ winner, pTotal, bTotal }, ...h].slice(0, 120));
     setDealing(false);
   }
 
@@ -275,13 +360,7 @@ export default function Home() {
         )}
       </section>
 
-      <section className="history-strip">
-        <span className="history-label">ROAD</span>
-        <div className="history-items">
-          {history.length === 0 && <span className="muted">아직 결과 없음</span>}
-          {history.map((h, i) => <span key={`${h.winner}-${i}`} className={`road-dot ${h.winner}`}>{h.winner === 'player' ? 'P' : h.winner === 'banker' ? 'B' : 'T'}</span>)}
-        </div>
-      </section>
+      <BigRoad history={history} />
 
       <section className="bet-dock">
         <div className="bet-types">
